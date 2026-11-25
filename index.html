@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Osvětlení nohou</title>
+<style>
+:root{
+  --c:#ff6600; --glow:rgba(255,102,0,.4);
+  --bg:#16141a; --panel:#201d26; --ink:#efeaf3; --mute:#9a93a5; --line:#34303c;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*,*::before,*::after{box-sizing:inherit}
+html,body{margin:0}
+body{
+  min-height:100vh;
+  background:radial-gradient(120% 55% at 50% -8%, var(--glow), transparent 70%), var(--bg);
+  color:var(--ink);
+  font:16px/1.5 "Avenir Next","Segoe UI",system-ui,sans-serif;
+  transition:background .2s;
+}
+main{max-width:440px;margin:0 auto;padding:24px 20px 40px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+h1{font-size:1.5rem;font-weight:600;letter-spacing:-.01em;margin:0}
+.status{display:flex;align-items:center;gap:8px;color:var(--mute);font-size:.9rem;margin-top:4px}
+.dot{width:10px;height:10px;border-radius:50%;border:2px solid var(--mute)}
+.on .dot{background:var(--c);border-color:var(--c);box-shadow:0 0 10px var(--c)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,.wheel:focus-visible{outline:3px solid #fff;outline-offset:3px}
+#connect{
+  background:var(--ink);color:#16141a;border:0;border-radius:999px;
+  padding:10px 20px;font-weight:600;white-space:nowrap
+}
+.on #connect{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
+#warn{display:none;margin:16px 0 0;padding:12px 14px;border-radius:12px;background:#3a2326;color:#ffd9d9;font-size:.9rem}
+
+.wheel{
+  position:relative;width:min(78vw,320px);aspect-ratio:1;margin:32px auto 28px;border-radius:50%;
+  background:
+    radial-gradient(circle closest-side,#fff,rgba(255,255,255,0) 100%),
+    conic-gradient(red,yellow,lime,cyan,blue,magenta,red);
+  touch-action:none;cursor:pointer;
+  box-shadow:0 0 0 1px var(--line),0 24px 70px -24px var(--glow);
+}
+.knob{
+  position:absolute;width:30px;height:30px;border-radius:50%;
+  border:4px solid #fff;background:var(--c);
+  transform:translate(-50%,-50%);pointer-events:none;
+  box-shadow:0 2px 10px rgba(0,0,0,.5);
+}
+
+.row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.row label{font-weight:600}
+.row output{color:var(--mute);font-variant-numeric:tabular-nums}
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:30px;background:transparent;margin:0;touch-action:pan-y
+}
+input[type=range]::-webkit-slider-runnable-track{
+  height:14px;border-radius:7px;background:linear-gradient(90deg,#26222d,var(--c));
+}
+input[type=range]::-moz-range-track{
+  height:14px;border-radius:7px;background:linear-gradient(90deg,#26222d,var(--c));
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:30px;height:30px;margin-top:-8px;border-radius:50%;
+  background:#fff;border:0;box-shadow:0 2px 8px rgba(0,0,0,.5)
+}
+input[type=range]::-moz-range-thumb{
+  width:30px;height:30px;border-radius:50%;background:#fff;border:0;box-shadow:0 2px 8px rgba(0,0,0,.5)
+}
+
+.presets{display:flex;justify-content:space-between;margin-top:30px;gap:8px}
+.presets button{
+  flex:1;aspect-ratio:1;max-width:52px;border-radius:50%;
+  border:2px solid var(--line);padding:0
+}
+p.hint{color:var(--mute);font-size:.85rem;margin:28px 0 0}
+@media (prefers-reduced-motion:reduce){body{transition:none}}
+</style>
+</head>
+<body>
+<main id="app">
+  <header>
+    <div>
+      <h1>Osvětlení nohou</h1>
+      <div class="status"><span class="dot"></span><span id="status">Nepřipojeno</span></div>
+    </div>
+    <button id="connect" type="button">Připojit</button>
+  </header>
+  <div id="warn" role="alert"></div>
+
+  <div class="wheel" id="wheel" tabindex="0" role="slider" aria-label="Barva">
+    <div class="knob" id="knob"></div>
+  </div>
+
+  <div class="row"><label for="bri">Jas</label><output id="briOut">50 %</output></div>
+  <input id="bri" type="range" min="0" max="100" value="50">
+
+  <div class="presets" id="presets"></div>
+
+  <p class="hint">Po stisknutí „Připojit“ vyber v seznamu zařízení modul HMSoft (nebo podobný název).</p>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const app = $('app'), wheel = $('wheel'), knob = $('knob'),
+        bri = $('bri'), briOut = $('briOut'), statusEl = $('status'),
+        btn = $('connect'), warn = $('warn');
+
+  let hue = 24, sat = 1, rgb = {r:255, g:102, b:0};
+  let dev = null, ch = null, busy = false;
+  const dirty = {c:true, b:true};
+  const enc = new TextEncoder();
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  function hsv2rgb(h, s, v) {
+    const f = n => {
+      const k = (n + h / 60) % 6;
+      return v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+    };
+    return {r: Math.round(f(5) * 255), g: Math.round(f(3) * 255), b: Math.round(f(1) * 255)};
+  }
+  function rgb2hsv(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    let h = 0;
+    if (d) {
+      if (mx === r) h = ((g - b) / d) % 6;
+      else if (mx === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60; if (h < 0) h += 360;
+    }
+    return {h, s: mx ? d / mx : 0};
+  }
+
+  function render() {
+    rgb = hsv2rgb(hue, sat, 1);
+    const css = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+    const root = document.documentElement.style;
+    root.setProperty('--c', css);
+    root.setProperty('--glow', `rgba(${rgb.r},${rgb.g},${rgb.b},.4)`);
+    const a = hue * Math.PI / 180;
+    knob.style.left = (50 + 50 * sat * Math.sin(a)) + '%';
+    knob.style.top = (50 - 50 * sat * Math.cos(a)) + '%';
+    wheel.setAttribute('aria-valuetext', css);
+    briOut.textContent = bri.value + ' %';
+    dirty.c = true;
+  }
+
+  function pickFromPointer(e) {
+    const r = wheel.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2);
+    const dy = e.clientY - (r.top + r.height / 2);
+    hue = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+    sat = Math.min(1, Math.hypot(dx, dy) / (r.width / 2));
+    render();
+  }
+  let dragging = false;
+  wheel.addEventListener('pointerdown', e => { dragging = true; wheel.setPointerCapture(e.pointerId); pickFromPointer(e); });
+  wheel.addEventListener('pointermove', e => { if (dragging) pickFromPointer(e); });
+  wheel.addEventListener('pointerup', () => dragging = false);
+  wheel.addEventListener('pointercancel', () => dragging = false);
+
+  bri.addEventListener('input', () => { briOut.textContent = bri.value + ' %'; dirty.b = true; });
+
+  const presets = [
+    ['Teplá bílá', '#ffb46b'], ['Jantarová', '#ff5a00'], ['Červená', '#ff0000'],
+    ['Fialová', '#7a2cff'], ['Modrá', '#0066ff'], ['Tyrkysová', '#00e0c0']
+  ];
+  presets.forEach(([name, hex]) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.title = name; b.setAttribute('aria-label', name);
+    b.style.background = hex;
+    b.addEventListener('click', () => {
+      const n = parseInt(hex.slice(1), 16);
+      const {h, s} = rgb2hsv(n >> 16, (n >> 8) & 255, n & 255);
+      hue = h; sat = s; render();
+    });
+    $('presets').appendChild(b);
+  });
+
+  function setStatus(text, on) {
+    statusEl.textContent = text;
+    app.classList.toggle('on', !!on);
+    btn.textContent = on ? 'Odpojit' : 'Připojit';
+  }
+  function showWarn(text) { warn.textContent = text; warn.style.display = text ? 'block' : 'none'; }
+
+  async function flush() {
+    if (!ch || busy) return;
+    const msgs = [];
+    if (dirty.c) { msgs.push(`C${rgb.r},${rgb.g},${rgb.b}\n`); dirty.c = false; }
+    if (dirty.b) { msgs.push(`B${Math.round(bri.value * 2.55)}\n`); dirty.b = false; }
+    if (!msgs.length) return;
+    busy = true;
+    try {
+      for (const m of msgs) {
+        const data = enc.encode(m);
+        if (ch.writeValueWithoutResponse) await ch.writeValueWithoutResponse(data);
+        else await ch.writeValue(data);
+        await sleep(30);
+      }
+    } catch (err) {
+      dirty.c = dirty.b = true;
+    }
+    busy = false;
+  }
+  setInterval(flush, 60);
+
+  function onDisconnected() {
+    ch = null;
+    setStatus('Spojení se přerušilo', false);
+  }
+
+  async function connect() {
+    if (!navigator.bluetooth) {
+      showWarn('Tento prohlížeč neumí Bluetooth. Na Androidu otevři stránku v Chrome, na iPhonu v prohlížeči Bluefy.');
+      return;
+    }
+    showWarn('');
+    try {
+      setStatus('Připojování…', false);
+      dev = await navigator.bluetooth.requestDevice({acceptAllDevices: true, optionalServices: [0xFFE0]});
+      dev.addEventListener('gattserverdisconnected', onDisconnected);
+      const server = await dev.gatt.connect();
+      const svc = await server.getPrimaryService(0xFFE0);
+      ch = await svc.getCharacteristic(0xFFE1);
+      dirty.c = dirty.b = true;
+      setStatus('Připojeno: ' + (dev.name || 'modul'), true);
+    } catch (err) {
+      ch = null;
+      setStatus('Nepřipojeno', false);
+      if (err.name !== 'NotFoundError') {
+        showWarn('Připojení se nezdařilo. Zkontroluj, že je modul zapnutý a není připojený k jinému telefonu.');
+      }
+    }
+  }
+
+  btn.addEventListener('click', () => {
+    if (dev && dev.gatt.connected) { dev.gatt.disconnect(); } else { connect(); }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
